@@ -1,144 +1,246 @@
+#!/usr/bin/env python3
+"""
+AAI heatmap (all vs. all) based on the output table from CompareM.
+
+Examples:
+    python aai_heatmap.py -i aai_summary.tsv
+    python aai_heatmap.py -i aai_summary.tsv -n names.tsv -o results/aai_10-2026
+    python aai_heatmap.py -i aai_summary.tsv -n names.py -c "#f7fbff" "#6baed6" "#08306b"
+    python aai_heatmap.py -i aai_summary.tsv -c viridis
+"""
+
+import argparse
+import json
 import os
+import runpy
+import sys
+
 import numpy as np
 import pandas as pd
-import seaborn as sns
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import seaborn as sns
 import scipy.cluster.hierarchy as hc
+from scipy.spatial.distance import squareform
+
+DEFAULT_COLORS = ["#fff5eb", "#FFB870", "#A30000"]
 
 
-name_map = {
-    "GCA_000755205.1_ASM75520v1_genomic": "Meyerozyma caribbica",
-    "GCA_002245345.1_ASM224534v1_genomic": "Scheffersomyces stambukii",
-    "GCF_036850825.1_Schama1_genomic": "Scheffersomyces amazonensis",
-    "GCA_030578755.1_ASM3057875v1_genomic": "Scheffersomyces coipomensis",
-    "GCA_030555905.1_ASM3055590v1_genomic": "Scheffersomyces cryptocercus",
-    "GCA_030575095.1_ASM3057509v1_genomic": "Scheffersomyces ergatensis",
-    "GCA_030572695.1_ASM3057269v1_genomic": "Scheffersomyces illinoinensis",
-    "GCA_030572575.1_ASM3057257v1_genomic": "Scheffersomyces insectosa",
-    "GCA_001599395.1_JCM_9837_assembly_v001_genomic": "Scheffersomyces lignosus",
-    "GCA_030571865.1_ASM3057186v1_genomic": "Scheffersomyces parashehatae",
-    "GCA_030556775.1_ASM3055677v1_genomic": "Scheffersomyces quercinus",
-    "GCA_018489445.1_ASM1848944v1_genomic": "Scheffersomyces segobiensis",
-    "GCA_030674605.1_ASM3067460v1_genomic": "Scheffersomyces shehatae",
-    "GCF_019049425.1_ASM1904942v1_genomic": "Scheffersomyces spartinae",
-    "GCF_000209165.1_ASM20916v1_genomic": "Scheffersomyces stipitis",
-    "GCA_030565185.1_ASM3056518v1_genomic": "Scheffersomyces titani",
-    "GCA_030565005.1_ASM3056500v1_genomic": "Scheffersomyces virginianus",
-    "GCF_036884685.1_Schxyl1_genomic": "Scheffersomyces xylosifermentans",
-
-    "GCA_000497715.1_SpaArb1.0_genomic": "Spathaspora arborariae",
-    "GCA_002094185.1_ASM209418v1_genomic": "Spathaspora boniae",
-    "GCA_001657455.1_ASM165745v1_genomic": "Spathaspora girioi",
-    "GCA_001655755.1_ASM165575v1_genomic": "Spathaspora hagerdaliae",
-    "GCF_000223485.1_Spathaspora_passalidarum_v2.0_genomic": "Spathaspora passalidarum v2.0",
-    "GCA_002911495.2_ASM291149v2_genomic": "Spathaspora marinasilvae",
-    "GCA_003676035.1_ASM367603v1_genomic": "Spathaspora sp. JA1",
-    "GCA_002105455.1_ASM210545v1_genomic": "Spathaspora xylofermentans",
-    "GCA_001655765.1_ASM165576v1_genomic": "Spathaspora gorwiae",
-    "y6407_500bp": "Spathaspora brunopereirae sp.",
-    "y2822_500bp": "Spathaspora domphillipsii sp.",
-    "y7005_500bp": "UFMG-CM-Y7005",
-
-    "GCA_030582855.1_ASM3058285v1_genomic": "Candida lyxosophila",
-    "GCA_030572495.1_ASM3057249v1_genomic": "Candida sake",
-    "GCF_019202705.1_ASM1920270v1_genomic": "Candida subhashii",
-    "GCA_030585045.1_ASM3058504v1_genomic": "Candida parablackwelliae",
-    "GCA_030579015.1_ASM3057901v1_genomic": "Candida blackwelliae",
-    "GCA_030557085.1_ASM3055708v1_genomic": "Candida gigantensis",
-    "GCA_030582575.1_ASM3058257v1_genomic": "Candida buenavistaensis",
-    "GCF_000026945.1_ASM2694v1_genomic": "Candida dubliniensis",
-    "GCF_000182965.3_ASM18296v3_genomic": "Candida albicans",
-    "GCA_030563665.1_ASM3056366v1_genomic": "Candida broadrunensis",
-    "GCA_030572135.1_ASM3057213v1_genomic": "[Candida] alai",
-    "GCA_030557875.1_ASM3055787v1_genomic": "Candida neerlandica",
-    "GCA_030572435.1_ASM3057243v1_genomic": "Candida labiduridarum",
-    "GCA_030557105.1_ASM3055710v1_genomic": "Candida frijolesensis",
-    "GCA_030557055.1_ASM3055705v1_genomic": "Candida tetrigidarum",
-    "GCA_030566835.1_ASM3056683v1_genomic": "Candida viswanathii",
-    "GCA_030582595.1_ASM3058259v1_genomic": "Candida tropicalis",
-    "GCA_911254575.1_Wolfe_Cansan_genomic": "Candida sanyaensis",
-    "GCA_030582655.1_ASM3058265v1_genomic": "Candida sojae",
-    "GCA_030578955.1_ASM3057895v1_genomic": "Candida insectamans",
-    "GCA_050495715.1_ASM5049571v1_genomic": "Candida maltosa",
-}
+# --------------------------------------------------------------------------- #
+# Arguments
+# --------------------------------------------------------------------------- #
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Clustered AAI heatmap based on the output from CompareM.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    p.add_argument("-i", "--input", required=True,
+                   help="CompareM Table (TSV with '#Genome A', 'Genome B', 'Mean AAI').")
+    p.add_argument("-n", "--names", default=None,
+                   help="(Optional) Dictionary of Names: .json, .py (with variable "
+                        "'name_map') or .tsv/.csv with two columns (id, name).")
+    p.add_argument("-c", "--colors", nargs="+", default=DEFAULT_COLORS,
+                   help="Gradient colors (2 or more, from lowest to highest AAI) "
+                        "OR the name of a matplotlib colormap (e.g., OrRd, viridis).")
+    p.add_argument("-o", "--output", default=None,
+                   help="Output file prefix (can include directory). "
+                        "Default: input filename.")
+    p.add_argument("--formats", nargs="+", default=["pdf", "svg", "tiff", "png"],
+                   help="Output formats.")
+    p.add_argument("--min-aai", type=float, default=60,
+                   help="Values below this become 0 (and the lower bound of the scale).")
+    p.add_argument("--max-aai", type=float, default=100,
+                   help="Upper bound of the color scale.")
+    p.add_argument("--hide-low", action="store_true",
+                   help="Do not draw cells below --min-aai (they remain blank).")
+    p.add_argument("--method", default="average",
+                   choices=["average", "single", "complete", "weighted", "centroid", "median", "ward"],
+                   help="Linkage method for hierarchical clustering (average = UPGMA).")
+    p.add_argument("--underscore-to-space", action="store_true",
+                   help="Replace '_' with spaces in names not found in the dictionary.")
+    p.add_argument("--title", default="AAI(%): All versus All", help="Plot title.")
+    p.add_argument("--figsize", nargs=2, type=float, default=[20, 15],
+                   metavar=("WIDTH", "HEIGHT"), help="Figure size in inches.")
+    p.add_argument("--annot-size", type=float, default=5,
+                   help="Font size of values inside cells (0 = no values).")
+    p.add_argument("--dpi", type=int, default=300, help="Image resolution.")
+    return p.parse_args()
 
 
-# ---- Load and prepare data ----
-matrix = pd.read_csv('../Files/aai_7602_tirada.csv', sep='\t')
-selected_data = matrix.iloc[:, [0, 2, 5]].rename(columns={
-    "#Genome A": "GenomeA",
-    "Genome B": "GenomeB",
-    "Mean AAI": "AAI"
-})
+# --------------------------------------------------------------------------- #
+# Input / Loading
+# --------------------------------------------------------------------------- #
+def load_name_map(path):
+    """Reads the name dictionary from a .json, .py, or two-column table file."""
+    if path is None:
+        return {}
+    ext = os.path.splitext(path)[1].lower()
 
-# add symmetric pairs
-swapped = selected_data.rename(columns={"GenomeA": "GenomeB", "GenomeB": "GenomeA"})
-full_pairs = pd.concat([selected_data, swapped], ignore_index=True)
+    if ext == ".json":
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    elif ext == ".py":
+        data = runpy.run_path(path).get("name_map")
+        if not isinstance(data, dict):
+            sys.exit(f"[ERROR] {path} must define a dictionary named 'name_map'.")
+    else:
+        sep = "," if ext == ".csv" else "\t"
+        df = pd.read_csv(path, sep=sep, header=None, comment="#", dtype=str)
+        if df.shape[1] < 2:
+            sys.exit(f"[ERROR] {path} must have two columns: id and name.")
+        data = dict(zip(df.iloc[:, 0], df.iloc[:, 1]))
 
-# add diagonal = 100
-genomes = pd.unique(full_pairs["GenomeA"].tolist() + full_pairs["GenomeB"].tolist())
-diagonal = pd.DataFrame({
-    "GenomeA": genomes,
-    "GenomeB": genomes,
-    "AAI": 100
-})
-full_pairs = pd.concat([full_pairs, diagonal], ignore_index=True)
-
-# filter low values
-full_pairs["AAI"] = full_pairs["AAI"].apply(lambda x: x if x >= 65 else 0)
-
-
-# pivot to matrix
-ani_matrix = full_pairs.pivot(index="GenomeA", columns="GenomeB", values="AAI").fillna(0).astype(float)
-
-# ---- Perform hierarchical clustering ----
-linkage = hc.linkage(ani_matrix, method="average")  # UPGMA-like
-dendro = hc.dendrogram(linkage, labels=ani_matrix.index, no_plot=True)
-
-# reorder rows/cols according to clustering
-ordered_genomes = dendro["ivl"]
-ani_matrix = ani_matrix.loc[ordered_genomes, ordered_genomes]
-ani_matrix = ani_matrix.rename(index=name_map, columns=name_map)
+    return {str(k).strip(): str(v).strip() for k, v in data.items()}
 
 
-# Colors
-mask_zero = ani_matrix == 0
-mask = np.triu(np.ones_like(ani_matrix, dtype=bool), k=1)
-mask_combined = mask | mask_zero
+def load_comparem(path):
+    """Reads the CompareM table and returns GenomeA, GenomeB, and AAI columns."""
+    df = pd.read_csv(path, sep="\t")
+    df.columns = df.columns.str.strip()
+
+    wanted = {"#Genome A": "GenomeA", "Genome B": "GenomeB", "Mean AAI": "AAI"}
+    if all(c in df.columns for c in wanted):
+        df = df[list(wanted)].rename(columns=wanted)
+    else:
+        print("[WARNING] Header differs from expected; using columns 1, 3, and 6.")
+        df = df.iloc[:, [0, 2, 5]]
+        df.columns = ["GenomeA", "GenomeB", "AAI"]
+
+    df["GenomeA"] = df["GenomeA"].astype(str).str.strip()
+    df["GenomeB"] = df["GenomeB"].astype(str).str.strip()
+    df["AAI"] = pd.to_numeric(df["AAI"], errors="coerce")
+    return df
 
 
-cmap = mcolors.LinearSegmentedColormap.from_list("blue_red", ["#fff5eb","#FFB870", "#A30000"])
+# --------------------------------------------------------------------------- #
+# Processing
+# --------------------------------------------------------------------------- #
+def build_matrix(df):
+    """Builds the symmetric AAI matrix (diagonal = 100) WITHOUT applying cutoff.
+    Missing pairs become NaN."""
+    swapped = df.rename(columns={"GenomeA": "GenomeB", "GenomeB": "GenomeA"})
+    genomes = pd.unique(pd.concat([df["GenomeA"], df["GenomeB"]]))
+    diagonal = pd.DataFrame({"GenomeA": genomes, "GenomeB": genomes, "AAI": 100.0})
 
-# ---- Plot clustered heatmap ----
-
-plt.figure(figsize=(20, 15))
-sns.heatmap(ani_matrix,
-           # cmap="OrRd",
-            cmap=cmap,
-            mask=mask,
-            vmin=60,
-            vmax=100,
-            annot=True,
-            annot_kws={"fontsize":5},
-            fmt=".1f",
-            square=False,
-            # linewidths=0.05,
-            # linecolor="white", 
-            cbar_kws={"label": "AAI (%)", "shrink": 0.2})
-
-plt.xticks(rotation=90)
-plt.yticks(rotation=0)
-plt.title("AAI(%): All versus All")
-plt.tight_layout()
-cbar = plt.gcf().axes[-1]
-cbar.tick_params(labelsize=8)
-
-plt.savefig("aai_7602_tirada.pdf", dpi=300, bbox_inches='tight')
-plt.savefig("aai_7602_tirada.svg", dpi=300, bbox_inches='tight')
-plt.savefig("aai_7602_tirada.tiff", dpi=300, bbox_inches='tight')
-plt.savefig("aai_7602_tirada.png", dpi=300, bbox_inches='tight')
-
-plt.close()
+    full = pd.concat([df, swapped, diagonal], ignore_index=True)
+    mat = full.pivot_table(index="GenomeA", columns="GenomeB",
+                           values="AAI", aggfunc="mean")
+    return mat.reindex(index=genomes, columns=genomes).astype(float)
 
 
+def cluster_order(raw, method):
+    """Clusters directly using 100 - AAI distance between pairs."""
+    if len(raw) < 3:
+        return raw.index.tolist()
+
+    dist = 100 - raw
+    max_d = np.nanmax(dist.values)
+    dist = dist.fillna(max_d if np.isfinite(max_d) else 100)
+
+    arr = dist.to_numpy(copy=True)
+    arr = (arr + arr.T) / 2          # ensures symmetry
+    np.fill_diagonal(arr, 0)
+    arr = np.clip(arr, 0, None)
+
+    if method in ("ward", "centroid", "median"):
+        print(f"[WARNING] '{method}' assumes Euclidean distances; "
+              "for AAI, 'average' (UPGMA) is recommended.")
+
+    condensed = squareform(arr, checks=False)
+    link = hc.linkage(condensed, method=method)
+    return hc.dendrogram(link, labels=raw.index.tolist(), no_plot=True)["ivl"]
+
+
+def rename_genomes(mat, name_map, underscore_to_space):
+    if name_map:
+        missing = [g for g in mat.index if g not in name_map]
+        if missing:
+            print(f"[WARNING] {len(missing)} genome(s) missing from dictionary:")
+            for g in missing:
+                print(f"    - {g}")
+
+    def new_name(g):
+        if g in name_map:
+            return name_map[g]
+        return g.replace("_", " ") if underscore_to_space else g
+
+    labels = [new_name(g) for g in mat.index]
+    mat = mat.copy()
+    mat.index = labels
+    mat.columns = labels
+    return mat
+
+
+def build_cmap(colors):
+    if len(colors) == 1:
+        try:
+            return matplotlib.colormaps[colors[0]]
+        except KeyError:
+            sys.exit(f"[ERROR] '{colors[0]}' is not a valid colormap. "
+                     "Pass 2+ colors or a matplotlib colormap name.")
+    invalid = [c for c in colors if not mcolors.is_color_like(c)]
+    if invalid:
+        sys.exit(f"[ERROR] Invalid colors: {', '.join(invalid)}")
+    return mcolors.LinearSegmentedColormap.from_list("custom", colors)
+
+
+# --------------------------------------------------------------------------- #
+# Plotting
+# --------------------------------------------------------------------------- #
+def plot_heatmap(mat, args):
+    mask = np.triu(np.ones_like(mat, dtype=bool), k=1)
+    if args.hide_low:
+        mask |= (mat.values == 0)
+
+    annot = args.annot_size > 0
+    plt.figure(figsize=tuple(args.figsize))
+    ax = sns.heatmap(
+        mat,
+        cmap=build_cmap(args.colors),
+        mask=mask,
+        vmin=args.min_aai,
+        vmax=args.max_aai,
+        annot=annot,
+        annot_kws={"fontsize": args.annot_size} if annot else None,
+        fmt=".1f",
+        square=False,
+        cbar_kws={"label": "AAI (%)", "shrink": 0.2},
+    )
+
+    plt.xticks(rotation=90)
+    plt.yticks(rotation=0)
+    plt.title(args.title)
+    ax.collections[0].colorbar.ax.tick_params(labelsize=8)
+    plt.tight_layout()
+
+    prefix = args.output or os.path.splitext(os.path.basename(args.input))[0]
+    outdir = os.path.dirname(prefix)
+    if outdir:
+        os.makedirs(outdir, exist_ok=True)
+
+    for fmt in args.formats:
+        out = f"{prefix}.{fmt.lstrip('.')}"
+        plt.savefig(out, dpi=args.dpi, bbox_inches="tight")
+        print(f"[OK] {out}")
+    plt.close()
+
+
+# --------------------------------------------------------------------------- #
+def main():
+    args = parse_args()
+    name_map = load_name_map(args.names)
+    df = load_comparem(args.input)
+
+    raw = build_matrix(df)
+    order = cluster_order(raw, args.method)          # clustering on actual values
+    mat = raw.where(raw >= args.min_aai, 0)          # cutoff for display only
+    mat = mat.loc[order, order]
+    mat = rename_genomes(mat, name_map, args.underscore_to_space)
+
+    plot_heatmap(mat, args)
+
+
+if __name__ == "__main__":
+    main()
